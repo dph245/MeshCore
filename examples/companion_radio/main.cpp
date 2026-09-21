@@ -1,6 +1,10 @@
 #include <Arduino.h>   // needed for PlatformIO
 #include <Mesh.h>
 #include "MyMesh.h"
+#ifdef COMPANION_TRANSPORT_SWITCH
+  #include <Preferences.h>
+  #include "TransportMode.h"
+#endif
 
 // Believe it or not, this std C function is busted on some platforms!
 static uint32_t _atoi(const char* sp) {
@@ -103,6 +107,34 @@ MyMesh the_mesh(radio_driver, fast_rng, rtc_clock, tables, store
 
 /* END GLOBAL OBJECTS */
 
+#ifdef COMPANION_TRANSPORT_SWITCH
+static bool useWifi = false;
+static bool togglePending = false;
+
+bool companionUsesWifi() { return useWifi; }
+
+void requestCompanionTransportToggle() { togglePending = true; }
+
+void pollCompanionTransportToggle(bool buttonPressed) {
+  if (!togglePending || buttonPressed) return;
+  togglePending = false;
+
+  Preferences prefs;
+  if (!prefs.begin("comp-transport", false)) {
+    ui_task.showAlert("Mode save failed", 2000);
+    return;
+  }
+  const bool saved = prefs.putBool("wifi", !useWifi) == 1;
+  prefs.end();
+
+  if (saved) {
+    ESP.restart();
+  } else {
+    ui_task.showAlert("Mode save failed", 2000);
+  }
+}
+#endif
+
 void halt() {
   while (1) ;
 }
@@ -185,13 +217,30 @@ void setup() {
 #endif
 
 // add bluetooth interface
+#ifdef COMPANION_TRANSPORT_SWITCH
+  Preferences prefs;
+  if (prefs.begin("comp-transport", true)) {
+    useWifi = prefs.getBool("wifi", false);
+    prefs.end();
+  }
+#endif
+
 #if defined(BLE_PIN_CODE)
+#ifdef COMPANION_TRANSPORT_SWITCH
+  if (!useWifi) {
+#endif
   bluetooth_interface.begin(BLE_NAME_PREFIX, the_mesh.getNodePrefs()->node_name, the_mesh.getBLEPin());
   interface_manager.addInterface(InterfaceType::Bluetooth, &bluetooth_interface);
+#ifdef COMPANION_TRANSPORT_SWITCH
+  }
+#endif
 #endif
 
 // add wifi interface
 #ifdef WIFI_SSID
+#ifdef COMPANION_TRANSPORT_SWITCH
+  if (useWifi) {
+#endif
   board.setInhibitSleep(true);   // prevent sleep when WiFi is active
   WiFi.setAutoReconnect(true);
 
@@ -208,6 +257,9 @@ void setup() {
   WiFi.begin(WIFI_SSID, WIFI_PWD);
   wifi_interface.begin(TCP_PORT);
   interface_manager.addInterface(InterfaceType::WiFi, &wifi_interface);
+#ifdef COMPANION_TRANSPORT_SWITCH
+  }
+#endif
 #endif
 
 // add usb interface
@@ -250,6 +302,9 @@ void loop() {
   sensors.loop();
 #ifdef DISPLAY_CLASS
   ui_task.loop();
+#ifdef COMPANION_TRANSPORT_SWITCH
+  pollCompanionTransportToggle(ui_task.isButtonPressed());
+#endif
 #endif
   rtc_clock.tick();
 #ifdef HAS_EXTERNAL_WATCHDOG
@@ -264,7 +319,11 @@ void loop() {
 
 #if defined(ESP32) && defined(WIFI_SSID)
   // Safely attempt to reconnect every 10 seconds if flagged
-  if (wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
+  if (
+#ifdef COMPANION_TRANSPORT_SWITCH
+      useWifi &&
+#endif
+      wifi_needs_reconnect && (millis() - last_wifi_reconnect_attempt > 10000)) {
     WIFI_DEBUG_PRINTLN("Attempting manual WiFi reconnect...");
     WiFi.disconnect();
     WiFi.reconnect();

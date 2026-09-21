@@ -1,6 +1,9 @@
 #include "UITask.h"
 #include <helpers/TxtDataHelpers.h>
 #include "../MyMesh.h"
+#ifdef COMPANION_TRANSPORT_SWITCH
+  #include "../TransportMode.h"
+#endif
 #include "target.h"
 #ifdef WIFI_SSID
   #include <WiFi.h>
@@ -226,17 +229,32 @@ public:
       display.drawTextCentered(display.width() / 2, 22, tmp);
 
       #ifdef WIFI_SSID
+      #ifdef COMPANION_TRANSPORT_SWITCH
+        if (companionUsesWifi()) {
+      #endif
         IPAddress ip = WiFi.localIP();
         snprintf(tmp, sizeof(tmp), "IP: %d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
+      #ifdef COMPANION_TRANSPORT_SWITCH
+        if (WiFi.status() != WL_CONNECTED) {
+          strcpy(tmp, "WiFi: connecting");
+        }
+      #endif
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 54, tmp);
+      #ifdef COMPANION_TRANSPORT_SWITCH
+        }
+      #endif
       #endif
       if (_task->hasConnection()) {
         display.setColor(UIColor::warning_txt);
         display.setTextSize(1);
         display.drawTextCentered(display.width() / 2, 43, "< Connected >");
 
-      } else if (the_mesh.getBLEPin() != 0) { // BT pin
+      } else if (
+      #ifdef COMPANION_TRANSPORT_SWITCH
+          !companionUsesWifi() &&
+      #endif
+          the_mesh.getBLEPin() != 0) { // BT pin
         display.setColor(UIColor::warning_txt);
         display.setTextSize(2);
         sprintf(tmp, "Pin:%d", the_mesh.getBLEPin());
@@ -293,7 +311,11 @@ public:
           32, 32);
       display.setColor(UIColor::secondary_txt);
       display.setTextSize(1);
-      display.drawTextCentered(display.width() / 2, 64 - 11, "toggle: " PRESS_LABEL);
+      display.drawTextCentered(display.width() / 2, 64 - 11,
+      #ifdef COMPANION_TRANSPORT_SWITCH
+          companionUsesWifi() ? "BLE inactive" :
+      #endif
+          "toggle: " PRESS_LABEL);
     } else if (_page == HomePage::ADVERT) {
       display.setColor(UIColor::corp_blue);
       display.drawXbm((display.width() - 32) / 2, 18, advert_icon, 32, 32);
@@ -448,7 +470,17 @@ public:
       }
       return true;
     }
+    #ifdef COMPANION_TRANSPORT_SWITCH
+    if (c == KEY_ENTER && _page == HomePage::FIRST) {
+      requestCompanionTransportToggle();
+      _task->showAlert("Release to switch", 1500);
+      return true;
+    }
+    #endif
     if (c == KEY_ENTER && _page == HomePage::BLUETOOTH) {
+    #ifdef COMPANION_TRANSPORT_SWITCH
+      if (companionUsesWifi()) return true;
+    #endif
       if (_task->isBluetoothEnabled()) {  // toggle Bluetooth on/off
         _task->disableBluetooth();
       } else {
